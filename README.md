@@ -14,7 +14,8 @@ A simple self-hosted uptime dashboard for OJS, PHP, CodeIgniter, Laravel, Next.j
 
 Laravel 13 requires PHP >= 8.3. MySQL is supported by Laravel; configure it through `.env`.
 
-## 1. Create the database
+## 1. Create the database 
+
 
 Create a MySQL database and user in Hostinger. Example:
 
