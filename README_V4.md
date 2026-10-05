@@ -1,6 +1,13 @@
-# Website Monitor v4
+# Website Monitor v4 → v5
 
-## Major changes
+## v5 additions (multi-level health detection)
+- Statuses: up / slow / warning / suspicious / down. HTTP 200 alone is never treated as healthy.
+- Content validation: expected title/keywords, blank-page and PHP fatal-output detection.
+- File integrity monitoring with trusted SHA-256 baselines (read-only; files are never executed).
+- Weighted compromise indicators (defacement markers, obfuscated code, hidden iframes, external redirects) with a combined risk score.
+- State-change email alerts (security / down / warning / recovered) — no repeated notifications for unchanged incidents.
+
+## Major changes (v4)
 - Check All runs sequentially in the browser, one website per request, eliminating the long controller request that caused Hostinger 504 Gateway Timeout errors.
 - Progress modal shows live percentage, current item and per-site result.
 - Single-site Recheck is AJAX based.
@@ -11,7 +18,7 @@
 - Security score and response headers are stored for diagnostics.
 
 ## Existing database
-Import `database/upgrade_to_v4.sql` once, then run `php artisan optimize:clear`.
+Import `database/upgrade_to_v4.sql` (v3→v4) and then `database/upgrade_to_v5.sql` (v4→v5) once, then run `php artisan optimize:clear`. Both scripts are idempotent.
 
 ## Fresh database
 Use `database/website_monitor_hostinger.sql`.

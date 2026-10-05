@@ -30,9 +30,18 @@ class WebsiteController extends Controller
             'url' => ['required', 'url', 'max:2048', 'unique:websites,url'],
             'technology' => ['nullable', 'string', 'max:100'],
             'document_root' => ['nullable', 'string', 'max:1024'],
+            'expected_title' => ['nullable', 'string', 'max:255'],
+            'expected_keywords' => ['nullable', 'string', 'max:2000'],
+            'expected_http_code' => ['nullable', 'integer', 'min:100', 'max:599'],
         ]);
 
-        Website::create($data + ['is_active' => $request->boolean('is_active', true), 'maintenance_mode' => false, 'status' => 'unknown']);
+        Website::create($data + [
+            'is_active' => $request->boolean('is_active', true),
+            'maintenance_mode' => false,
+            'status' => 'unknown',
+            'content_check_enabled' => $request->boolean('content_check_enabled', true),
+            'file_integrity_enabled' => $request->boolean('file_integrity_enabled'),
+        ]);
         return redirect()->route('websites.index')->with('success', 'Website added successfully.');
     }
 
@@ -48,8 +57,16 @@ class WebsiteController extends Controller
             'url' => ['required', 'url', 'max:2048', \Illuminate\Validation\Rule::unique('websites', 'url')->ignore($website->id)],
             'technology' => ['nullable', 'string', 'max:100'],
             'document_root' => ['nullable', 'string', 'max:1024'],
+            'expected_title' => ['nullable', 'string', 'max:255'],
+            'expected_keywords' => ['nullable', 'string', 'max:2000'],
+            'expected_http_code' => ['nullable', 'integer', 'min:100', 'max:599'],
         ]);
-        $website->update($data + ['is_active' => $request->boolean('is_active'), 'maintenance_mode' => $request->boolean('maintenance_mode')]);
+        $website->update($data + [
+            'is_active' => $request->boolean('is_active'),
+            'maintenance_mode' => $request->boolean('maintenance_mode'),
+            'content_check_enabled' => $request->boolean('content_check_enabled'),
+            'file_integrity_enabled' => $request->boolean('file_integrity_enabled'),
+        ]);
         return redirect()->route('websites.index')->with('success', 'Website updated.');
     }
 
@@ -73,6 +90,9 @@ class WebsiteController extends Controller
                 'response_time_ms' => $fresh->response_time_ms,
                 'security_status' => $fresh->security_status,
                 'security_findings_count' => count($fresh->security_findings ?? []),
+                'content_ok' => $fresh->last_content_ok,
+                'integrity_status' => $fresh->integrity_status,
+                'reasons' => $fresh->status_reasons ?? [],
                 'error' => $fresh->last_error,
                 'checked_at' => optional($fresh->last_checked_at)->toIso8601String(),
             ]);

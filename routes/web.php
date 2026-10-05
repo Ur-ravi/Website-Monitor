@@ -21,6 +21,7 @@ Route::middleware('auth')->group(function(){
     Route::get('/websites/{website}/diagnose',[DiagnosticController::class,'show'])->name('websites.diagnose');
     Route::post('/websites/{website}/recheck',[DiagnosticController::class,'recheck'])->name('websites.recheck');
     Route::post('/websites/{website}/security-scan',[DiagnosticController::class,'security'])->name('websites.security');
+    Route::post('/websites/{website}/baseline',[DiagnosticController::class,'baseline'])->name('websites.baseline');
     Route::get('/settings/admin',[SettingsController::class,'edit'])->name('settings.admin');
     Route::post('/settings/admin',[SettingsController::class,'update'])->name('settings.admin.update');
 });

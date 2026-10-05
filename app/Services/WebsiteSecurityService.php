@@ -92,4 +92,194 @@ class WebsiteSecurityService
         } catch(Throwable $e){ return ['status'=>'error','findings'=>$findings,'scanned'=>$scanned,'message'=>$e->getMessage()]; }
         return ['status'=>$findings?'suspicious':'clean','findings'=>$findings,'scanned'=>$scanned,'message'=>$findings?'Review detected patterns before deleting anything.':'No configured heuristic indicators found.'];
     }
+
+    /**
+     * Weighted compromise indicators for arbitrary untrusted content (HTTP body or file).
+     * The SUM of weights decides the outcome - a single innocent keyword can never mark a site compromised.
+     *
+     * @return array<int, array{key:string, reason:string, weight:int, severity:string}>
+     */
+    public function contentRiskIndicators(string $content): array
+    {
+        $indicators = [];
+        $push = function (string $key, string $reason, int $weight, string $severity) use (&$indicators) {
+            $indicators[] = ['key' => $key, 'reason' => $reason, 'weight' => $weight, 'severity' => $severity];
+        };
+
+        // Obfuscated dynamic code execution (strongest signal).
+        if (preg_match('/eval\s*\(\s*(base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|rawurldecode|hex2bin|strrev)\s*\(/i', $content)) {
+            $push('obfuscated_eval', 'Obfuscated eval() payload detected (eval + encoding function)', 45, 'high');
+        } elseif (preg_match('/\beval\s*\(/i', $content)) {
+            $push('eval_usage', 'eval() usage detected in response content', 10, 'medium');
+        }
+
+        if (preg_match('/\b(shell_exec|passthru|proc_open|popen)\s*\(/i', $content)) {
+            $push('shell_execution', 'Shell/process execution function detected in content', 25, 'high');
+        }
+        if (preg_match('/\bsystem\s*\(|\bexec\s*\(/i', $content)) {
+            $push('command_execution', 'Command execution function detected in content', 20, 'medium');
+        }
+
+        // Encoded/obfuscated payloads.
+        if (preg_match('/[A-Za-z0-9+\/]{300,}={0,2}/', $content)) {
+            $push('large_encoded_payload', 'Large encoded (base64-like) payload embedded in content', 30, 'high');
+        }
+        if (preg_match('/(?:\\x[0-9a-fA-F]{2}){16,}/', $content)) {
+            $push('hex_encoded_payload', 'Hex-encoded payload string detected', 30, 'high');
+        }
+        if (stripos($content, 'var _0x') !== false || preg_match('/_0x[0-9a-f]{4,}\s*=/i', $content)) {
+            $push('obfuscated_javascript', 'Obfuscated JavaScript (hex-variable style) detected', 35, 'high');
+        }
+        if (preg_match('/document\.write\s*\(\s*unescape\s*\(/i', $content)) {
+            $push('obfuscated_write', 'document.write(unescape(...)) injection pattern detected', 25, 'high');
+        }
+
+        // Hidden iframe injection.
+        if (preg_match('/<iframe[^>]*(width\s*=\s*["\']?0\b|height\s*=\s*["\']?0\b|display\s*:\s*none|visibility\s*:\s*hidden|left\s*:\s*-[0-9]{3,}|top\s*:\s*-[0-9]{3,})/i', $content)) {
+            $push('hidden_iframe', 'Hidden iframe injection detected', 30, 'high');
+        }
+
+        // Unexpected redirect injection via meta refresh.
+        if (preg_match('/<meta[^>]+http-equiv\s*=\s*["\']?refresh["\']?[^>]*url\s*=\s*(https?:)?\/\//i', $content)) {
+            $push('meta_redirect', 'Meta-refresh redirect to an external URL detected', 20, 'medium');
+        }
+
+        // Defacement markers (single match is a strong signal).
+        foreach ((array)config('monitoring.security.defacement_keywords', []) as $keyword) {
+            if ($keyword !== '' && stripos($content, $keyword) !== false) {
+                $push('defacement_marker', 'Defacement marker detected ("' . $keyword . '")', 45, 'high');
+                break;
+            }
+        }
+
+        // Spam/phishing markers (require >= 2 distinct matches to escalate; 1 match is a low signal).
+        $spamHits = [];
+        foreach ((array)config('monitoring.security.spam_keywords', []) as $keyword) {
+            if ($keyword !== '' && stripos($content, $keyword) !== false) $spamHits[] = $keyword;
+        }
+        if (count($spamHits) >= 2) {
+            $push('spam_content', 'Multiple spam/phishing markers detected ("' . implode('", "', array_slice($spamHits, 0, 3)) . '")', 30, 'high');
+        } elseif (count($spamHits) === 1) {
+            $push('spam_content_single', 'Spam marker detected ("' . $spamHits[0] . '")', 12, 'medium');
+        }
+
+        // Known web-shell file names.
+        foreach ((array)config('monitoring.security.shell_names', []) as $name) {
+            if ($name !== '' && stripos($content, $name) !== false) {
+                $push('webshell_name', 'Known web-shell identifier detected ("' . $name . '")', 50, 'high');
+                break;
+            }
+        }
+
+        // PHP source exposure in an HTML response (server misconfiguration or injected file).
+        if (stripos($content, '<?php') !== false && stripos($content, '<html') !== false) {
+            $push('php_source_exposure', 'Raw PHP source code exposed in HTML response', 20, 'medium');
+        }
+
+        return $indicators;
+    }
+
+    /**
+     * Read-only file integrity check for important files against stored SHA-256 baselines.
+     * Files are hashed and pattern-scanned - NEVER executed.
+     */
+    public function checkFileIntegrity(Website $website): array
+    {
+        $root = $this->validatedRoot($website);
+        if ($root === null) {
+            return ['status' => 'not_configured', 'files' => [], 'findings' => [], 'risk' => 0, 'message' => 'Document root is not configured or is invalid.'];
+        }
+        $files = (array)config('monitoring.integrity.important_files', []);
+        $baselines = \App\Models\WebsiteFileBaseline::where('website_id', $website->id)->get()->keyBy('path');
+        $result = ['status' => 'ok', 'files' => [], 'findings' => [], 'risk' => 0, 'root' => $root];
+        $hasBaseline = false;
+
+        foreach ($files as $relative) {
+            $entry = ['path' => $relative, 'state' => 'absent', 'hash' => null, 'baseline' => null];
+            $baseline = $baselines->get($relative);
+            if ($baseline) {
+                $hasBaseline = true;
+                $entry['baseline'] = $baseline->sha256;
+            }
+            $absolute = $root . DIRECTORY_SEPARATOR . $relative;
+            if (!is_file($absolute)) {
+                if ($baseline) {
+                    $entry['state'] = 'missing';
+                    $result['findings'][] = ['type' => 'file_integrity', 'file' => $relative, 'reason' => 'Important file removed from the server', 'severity' => 'high', 'weight' => 40];
+                }
+                $result['files'][] = $entry;
+                continue;
+            }
+            $content = $this->readFileCapped($absolute);
+            if ($content === null) {
+                $result['files'][] = $entry;
+                continue;
+            }
+            $entry['hash'] = hash('sha256', $content);
+            if (!$baseline) {
+                $entry['state'] = 'baseline_missing';
+            } elseif (hash_equals($baseline->sha256, $entry['hash'])) {
+                $entry['state'] = 'ok';
+            } else {
+                $entry['state'] = 'changed';
+                $riskIndicators = $this->contentRiskIndicators($content);
+                $riskSum = array_sum(array_map(fn($i) => (int)$i['weight'], $riskIndicators));
+                $result['findings'][] = ['type' => 'file_integrity', 'file' => $relative, 'reason' => 'File changed since the trusted baseline was recorded', 'severity' => $riskSum >= 25 ? 'high' : 'medium', 'weight' => min(40, 10 + $riskSum)];
+                foreach ($riskIndicators as $indicator) {
+                    $result['findings'][] = ['type' => 'file_integrity', 'file' => $relative, 'reason' => 'Suspicious pattern in changed file: ' . $indicator['reason'], 'pattern' => $indicator['key'], 'severity' => $indicator['severity'], 'weight' => $indicator['weight']];
+                }
+                $result['risk'] += $riskSum;
+            }
+            $result['files'][] = $entry;
+        }
+
+        $changedCount = count(array_filter($result['files'], fn($f) => in_array($f['state'], ['changed', 'missing'], true)));
+        $result['status'] = $changedCount > 0 ? 'changed' : ($hasBaseline ? 'ok' : 'baseline_missing');
+        $result['message'] = match ($result['status']) {
+            'changed' => 'One or more important files changed since the trusted baseline.',
+            'baseline_missing' => 'No trusted baseline recorded yet for the important files.',
+            default => 'All important files match their trusted baselines.',
+        };
+        return $result;
+    }
+
+    /** Create/refresh trusted SHA-256 baselines for important files. Returns number of files baselined. */
+    public function setFileBaselines(Website $website): int
+    {
+        $root = $this->validatedRoot($website);
+        if ($root === null) return 0;
+        $count = 0;
+        foreach ((array)config('monitoring.integrity.important_files', []) as $relative) {
+            $absolute = $root . DIRECTORY_SEPARATOR . $relative;
+            if (!is_file($absolute)) continue;
+            $content = $this->readFileCapped($absolute);
+            if ($content === null) continue;
+            \App\Models\WebsiteFileBaseline::updateOrCreate(
+                ['website_id' => $website->id, 'path' => $relative],
+                ['sha256' => hash('sha256', $content), 'size' => strlen($content), 'recorded_at' => now()]
+            );
+            $count++;
+        }
+        return $count;
+    }
+
+    /** Validate the document root to prevent path traversal / unsafe roots. */
+    private function validatedRoot(Website $website): ?string
+    {
+        $root = trim((string)$website->document_root);
+        if ($root === '' || str_contains($root, "\0")) return null;
+        $real = realpath($root);
+        if ($real === false || !is_dir($real)) return null;
+        return $real;
+    }
+
+    /** Read a file with a hard size cap. Never executes file content. */
+    private function readFileCapped(string $path): ?string
+    {
+        $max = (int)config('monitoring.integrity.max_file_bytes', 5 * 1024 * 1024);
+        $size = @filesize($path);
+        if ($size === false || $size > $max) return null;
+        $content = @file_get_contents($path);
+        return $content === false ? null : $content;
+    }
 }

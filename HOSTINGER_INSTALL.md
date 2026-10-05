@@ -1,4 +1,4 @@
-# Website Monitor v3 — Hostinger Installation
+# Website Monitor v5 — Hostinger Installation
 
 ## Requirements
 - Laravel 13
@@ -23,11 +23,11 @@ For a fresh installation, import:
 
 `database/website_monitor_hostinger.sql`
 
-For your EXISTING Website Monitor database, use:
+For your EXISTING Website Monitor (v3/v4) database, use:
 
-`database/upgrade_to_v3.sql`
+`database/upgrade_to_v5.sql`
 
-The upgrade script does not delete existing website records.
+The upgrade script is idempotent and does not delete existing website records. If you are still on v3, import `upgrade_to_v4.sql` first, then `upgrade_to_v5.sql`.
 
 ## 3. Environment
 The package contains a production `.env` configured for the database supplied by the project owner. For security, change the database password in Hostinger if it has been exposed.

@@ -1,10 +1,11 @@
--- Website Monitor v3 - Laravel 13 / MySQL
+-- Website Monitor v5 - Laravel 13 / MySQL
 -- SAFE FRESH IMPORT: drops/recreates application tables. BACK UP an existing DB first.
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS=0;
 
 DROP TABLE IF EXISTS monitoring_logs;
 DROP TABLE IF EXISTS websites;
+DROP TABLE IF EXISTS website_file_baselines;
 DROP TABLE IF EXISTS failed_jobs;
 DROP TABLE IF EXISTS job_batches;
 DROP TABLE IF EXISTS jobs;
@@ -49,6 +50,17 @@ CREATE TABLE websites (
  last_ssl_check_at TIMESTAMP NULL,
  security_score TINYINT UNSIGNED NULL,
  security_headers JSON NULL,
+ expected_title VARCHAR(255) NULL,
+ expected_keywords TEXT NULL,
+ expected_http_code SMALLINT UNSIGNED NULL,
+ content_check_enabled TINYINT(1) NOT NULL DEFAULT 1,
+ file_integrity_enabled TINYINT(1) NOT NULL DEFAULT 0,
+ homepage_baseline JSON NULL,
+ integrity_status VARCHAR(30) NOT NULL DEFAULT 'unknown',
+ last_content_ok TINYINT(1) NULL,
+ status_reasons JSON NULL,
+ first_suspicious_at TIMESTAMP NULL,
+ last_suspicious_at TIMESTAMP NULL,
  created_at TIMESTAMP NULL, updated_at TIMESTAMP NULL,
  PRIMARY KEY(id), KEY websites_status_index(status,is_active), KEY websites_last_checked_index(last_checked_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -67,10 +79,26 @@ CREATE TABLE monitoring_logs (
  diagnostic JSON NULL,
  security_score TINYINT UNSIGNED NULL,
  security_headers JSON NULL,
+ content_ok TINYINT(1) NULL,
+ integrity_status VARCHAR(30) NOT NULL DEFAULT 'unknown',
+ status_reasons JSON NULL,
+ homepage_hash VARCHAR(64) NULL,
  checked_at TIMESTAMP NOT NULL,
  created_at TIMESTAMP NULL, updated_at TIMESTAMP NULL,
  PRIMARY KEY(id), KEY logs_website_checked(website_id,checked_at),
  CONSTRAINT monitoring_logs_website_id_foreign FOREIGN KEY(website_id) REFERENCES websites(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE website_file_baselines (
+ id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+ website_id BIGINT UNSIGNED NOT NULL,
+ path VARCHAR(512) NOT NULL,
+ sha256 VARCHAR(64) NOT NULL,
+ size BIGINT UNSIGNED NULL,
+ recorded_at TIMESTAMP NULL,
+ created_at TIMESTAMP NULL, updated_at TIMESTAMP NULL,
+ PRIMARY KEY(id), UNIQUE KEY website_file_baselines_website_id_path_unique(website_id,path),
+ CONSTRAINT website_file_baselines_website_id_foreign FOREIGN KEY(website_id) REFERENCES websites(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE sessions (
